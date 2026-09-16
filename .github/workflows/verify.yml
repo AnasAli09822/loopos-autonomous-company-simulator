@@ -14,3 +14,8 @@ jobs:
       - run: npm test
       - run: node scripts/evaluate.mjs
       - run: npm run build
+      - name: Verify live production
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          LIVE_BASE_URL: https://loopos-autonomous-company-simulator-nathmagency-2935s-projects.vercel.app
+        run: node scripts/live-verify.mjs
