@@ -1,0 +1,9 @@
+import { initialState } from '../lib/engine/state.js';
+import { runDay, resolveHuman } from '../lib/engine/orchestrator.js';
+const checks=[];const check=(name,ok)=>{checks.push([name,!!ok]);console.log(`${ok?'PASS':'FAIL'} ${name}`)};
+let r=await runDay(initialState(),'normal','eval_normal');check('normal revenue moves',r.kpis_after.revenue>0);check('normal cash moves',r.kpis_after.cash>30000);check('normal backlog clears',r.kpis_after.backlog===0);
+r=await runDay(initialState(),'demand_surge','eval_surge');check('surge triggers ops throttle',r.agents.ops.monitor.throttled);check('finance approves bounded flex',r.agents.finance.control.approved_budgets.length===1);check('ops activates flex',r.agents.ops.execute.activated_flex===2);check('surge self-corrects without human',r.self_corrected&&!r.human_required);check('surge cost moves',r.kpis_after.cost===800);
+const replay=await runDay(initialState(),'demand_surge','eval_surge');check('surge replay deterministic',replay.state_hash===r.state_hash);
+let s=initialState();r=await runDay(s,'enterprise_discount','eval_discount');check('discount creates human boundary',r.human_required&&r.kpis_after.pipeline===12000);resolveHuman(s,'inbox_0001','approve');r=await runDay(s,'quiet','eval_resume');check('human approval returns lead to loop',r.kpis_after.revenue===9000&&r.kpis_after.pipeline===0);
+r=await runDay(initialState(),'sales_runaway','eval_failure');check('failure detected by finance',r.agents.finance.control.control_breach);check('failure suspends sales',r.kpis_after.sales_suspended);check('ops compensates backlog',r.agents.ops.monitor.backlog_before===7&&r.agents.ops.recover.backlog_after===1);check('failure escalates human review',r.human_required);check('failure moves actual churn',r.kpis_after.churned_customers===1);
+const passed=checks.filter(([,ok])=>ok).length;console.log(`\n${passed}/${checks.length} evaluation checks passed`);if(passed!==checks.length)process.exit(1);

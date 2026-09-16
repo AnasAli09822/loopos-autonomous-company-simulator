@@ -1,0 +1,41 @@
+'use client';
+import { useEffect, useState } from 'react';
+
+const scenarios = [
+  ['normal','Normal day'],['demand_surge','Demand surge · self-correction'],['enterprise_discount','Enterprise discount · human boundary'],['quiet','Quiet day'],['sales_runaway','Sales runaway · failure test']
+];
+function money(v){return new Intl.NumberFormat('en-US',{style:'currency',currency:'USD',maximumFractionDigits:0}).format(v||0)}
+function getSession(){if(typeof window==='undefined')return 'public-demo';let s=localStorage.getItem('loopos_session_v3');if(!s){s=`judge_${crypto.randomUUID().replaceAll('-','').slice(0,20)}`;localStorage.setItem('loopos_session_v3',s)}return s}
+
+export default function Home(){
+  const [state,setState]=useState(null),[scenario,setScenario]=useState('demand_surge'),[message,setMessage]=useState('Ready.'),[busy,setBusy]=useState(false),[session,setSession]=useState(null);
+  useEffect(()=>setSession(getSession()),[]);
+  async function api(path,opts={}){if(!session)throw new Error('Session is initializing');const r=await fetch(path,{...opts,headers:{'content-type':'application/json','x-loopos-session':session,...(opts.headers||{})},cache:'no-store'});const body=await r.json();if(!r.ok)throw new Error(body.detail||`HTTP ${r.status}`);return body}
+  async function refresh(){setState(await api('/api/state'))}
+  useEffect(()=>{if(session)refresh().catch(e=>setMessage(e.message))},[session]);
+  async function act(fn){setBusy(true);try{await fn();await refresh()}catch(e){setMessage(e.message)}finally{setBusy(false)}}
+  async function runDay(){await act(async()=>{const r=await api('/api/run/day',{method:'POST',body:JSON.stringify({scenario})});if(r.scenario==='sales_runaway')setMessage(`Failure contained · Sales closed ${r.agents.sales.closed.length} · backlog ${r.agents.ops.monitor.backlog_before} → ${r.agents.ops.recover.backlog_after} · churn +${r.kpi_delta.churned_customers} · Sales suspended · human review opened`);else if(r.self_corrected)setMessage(`Self-corrected · backlog ${r.agents.ops.monitor.backlog_before} → ${r.agents.ops.recover.backlog_after} · flex +${r.agents.ops.execute.activated_flex} · cost +${money(r.kpi_delta.cost)}`);else if(r.human_required)setMessage('Human boundary · out-of-policy decision is waiting for review.');else setMessage(`Day ${r.day} completed.`)})}
+  async function runWeek(){await act(async()=>{const r=await api('/api/run/week',{method:'POST',body:'{}'});setMessage(r.status==='paused_for_human'?'Week paused: human decision required.':'Week complete.')})}
+  async function reset(){await act(async()=>{await api('/api/reset',{method:'POST',body:'{}'});setMessage('Company reset to Day 0.')})}
+  async function decide(id,decision){const item=state.human_inbox.find(x=>x.id===id);await act(async()=>{await api(`/api/human/${id}`,{method:'POST',body:JSON.stringify({decision})});setMessage(state.kpis.day>=5&&item?.kind==='control_breach'?`Human ${decision} recorded · five-day simulation complete.`:`Human ${decision} recorded. Run the next day to continue.`)})}
+  async function replay(runId){await act(async()=>{const r=await api(`/api/replay/${runId}`,{method:'POST',body:'{}'});setMessage(r.deterministic_match?`Replay verified · ${r.replay_hash.slice(0,20)}…`:'Replay mismatch detected')})}
+  if(!state)return <main className="shell"><div className="loading">Loading company state…</div></main>;
+  const k=state.kpis, done=k.day>=5;
+  return <main className="shell">
+    <header className="hero"><div><p className="eyebrow">AUTONOMOUS COMPANY SIMULATOR</p><h1>LoopOS</h1><p className="lede">Sales, Operations, and Finance operate one shared company record—with explicit authority, moving KPIs, replay, and human boundaries.</p></div><div className="statusbox"><span>Northstar Cloud</span><strong>Day {k.day} / 5</strong><small>Neon shared state · Vercel runtime</small></div></header>
+    <section className="controlbar"><select value={scenario} onChange={e=>setScenario(e.target.value)} disabled={busy||done}>{scenarios.map(([v,l])=><option key={v} value={v}>{l}</option>)}</select><button onClick={runDay} disabled={busy||done}>Run day</button><button onClick={runWeek} disabled={busy||done}>Run the week</button><button className="secondary" onClick={reset} disabled={busy}>Reset</button><div className="message">{message}</div></section>
+    <section className="kpis">
+      <K label="Revenue" value={money(k.revenue)}/><K label="Cost" value={money(k.cost)}/><K label="Cash" value={money(k.cash)}/><K label="Backlog" value={k.backlog}/><K label="Churned customers" value={k.churned_customers}/><K label="Pipeline" value={money(k.pipeline)}/><K label="Human inbox" value={k.open_human_items}/>
+    </section>
+    <section className="grid two"><Panel title="Operating controls"><div className="controlrow"><span>Sales throttle</span><b className={state.controls.sales_throttled?'warn':'ok'}>{state.controls.sales_throttled?'ON':'OFF'}</b></div><div className="controlrow"><span>Sales authority</span><b className={state.controls.sales_suspended?'danger':'ok'}>{state.controls.sales_suspended?'SUSPENDED':'ACTIVE'}</b></div><div className="controlrow"><span>Capacity</span><b>{state.controls.base_capacity} base + {state.controls.flex_capacity} flex</b></div><div className="controlrow"><span>Cash reserve floor</span><b>{money(state.controls.cash_reserve_floor)}</b></div></Panel><Panel title="Agent boundaries"><Role n="Sales" t="Leads → orders · escalates discounts"/><Role n="Operations" t="Backlog → capacity · cannot approve spend"/><Role n="Finance" t="Budgets, invoices, cash · can suspend Sales"/><Role n="Human" t="Only resolves escalated judgment calls"/></Panel></section>
+    <section className="grid two"><Panel title={`Human inbox · ${state.human_inbox.length} open`}>{state.human_inbox.length?state.human_inbox.map(i=><div className="inbox" key={i.id}><b>{i.title}</b><small>{i.kind} · {i.id}</small><div><button onClick={()=>decide(i.id,'approve')} disabled={busy}>Approve</button><button className="secondary" onClick={()=>decide(i.id,'reject')} disabled={busy}>Reject</button>{i.kind==='control_breach'&&<button className="secondary" onClick={()=>decide(i.id,'acknowledge')} disabled={busy}>Acknowledge</button>}</div></div>):<p className="muted">No human judgment required.</p>}</Panel><Panel title="Recorded days">{state.runs.length?state.runs.map(r=><div className="runrow" key={r.run_id}><div><b>Day {r.day} · {r.scenario}</b><small>{String(r.after_hash).slice(0,18)}…</small></div><button className="secondary" onClick={()=>replay(r.run_id)} disabled={busy}>Replay</button></div>):<p className="muted">No days recorded yet.</p>}</Panel></section>
+    <section className="grid three"><Records title="Leads" rows={state.records.leads} cols={['id','company','status','value']}/><Records title="Orders" rows={state.records.orders} cols={['id','customer_name','status','amount']}/><Records title="Invoices" rows={state.records.invoices} cols={['id','order_id','status','amount']}/></section>
+    <section className="grid two"><Panel title="Recent agent actions"><Feed rows={state.recent_actions} action/></Panel><Panel title="Shared event ledger"><Feed rows={state.recent_events}/></Panel></section>
+    <footer>Challenge 2 · The Autonomous Company Simulator · public demo sessions are isolated per browser.</footer>
+  </main>
+}
+function K({label,value}){return <div className="kpi"><span>{label}</span><strong>{value}</strong></div>}
+function Panel({title,children}){return <section className="panel"><h2>{title}</h2>{children}</section>}
+function Role({n,t}){return <div className="role"><b>{n}</b><span>{t}</span></div>}
+function Records({title,rows,cols}){return <Panel title={title}>{rows.length?<div className="tablewrap"><table><thead><tr>{cols.map(c=><th key={c}>{c}</th>)}</tr></thead><tbody>{rows.slice(0,8).map((r,i)=><tr key={r.id||i}>{cols.map(c=><td key={c}>{['value','amount'].includes(c)?money(r[c]):String(r[c]??'')}</td>)}</tr>)}</tbody></table></div>:<p className="muted">No records yet.</p>}</Panel>}
+function Feed({rows,action=false}){return <div className="feed">{rows.slice(0,12).map((r,i)=><div key={i}><b>{action?r.role:r.actor}</b><span>{action?r.action_type:r.event_type}</span><small>{r.record_id||''}</small></div>)}</div>}
