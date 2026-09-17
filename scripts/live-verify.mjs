@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 const base = (process.env.LIVE_BASE_URL || 'https://loopos-autonomous-company-simulator-nathmagency-2935s-projects.vercel.app').replace(/\/$/, '');
 const session = `ci_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
 const secondSession = `${session}_b`;
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 async function request(path, { method = 'GET', body, sid = session, expect = 200 } = {}) {
   const response = await fetch(`${base}${path}`, {
@@ -21,6 +22,25 @@ async function request(path, { method = 'GET', body, sid = session, expect = 200
   return data;
 }
 
+async function waitForProduction() {
+  let last;
+  for (let attempt = 1; attempt <= 24; attempt++) {
+    try {
+      const response = await fetch(`${base}/api/health`, { redirect: 'follow' });
+      const text = await response.text();
+      let data = null;
+      try { data = text ? JSON.parse(text) : null; } catch {}
+      last = { status: response.status, data, text };
+      if (response.status === 200 && data?.status === 'ok' && data?.database === 'ok' && data?.database_role === 'loopos_runtime_min') return data;
+    } catch (error) {
+      last = { error: error.message };
+    }
+    console.log(`Waiting for production deployment (${attempt}/24)...`);
+    await sleep(5000);
+  }
+  throw new Error(`Production did not become ready: ${JSON.stringify(last).slice(0, 500)}`);
+}
+
 function pass(name) { console.log(`PASS ${name}`); }
 
 const page = await fetch(base, { redirect: 'follow' });
@@ -28,12 +48,9 @@ assert.equal(page.status, 200, `Homepage status ${page.status}`);
 assert.match(page.headers.get('content-type') || '', /text\/html/i);
 pass('public homepage reachable');
 
-const health = await request('/api/health');
-assert.equal(health.status, 'ok');
+const health = await waitForProduction();
 assert.equal(health.storage, 'neon-postgres');
 assert.equal(health.platform, 'vercel');
-assert.equal(health.database, 'ok');
-assert.equal(health.database_role, 'loopos_runtime_min');
 pass('public health endpoint uses least-privilege Neon role');
 
 await request('/api/reset', { method: 'POST', body: {} });
