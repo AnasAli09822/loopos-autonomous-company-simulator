@@ -1,4 +1,4 @@
-import { ensureSession, loadSessionWithRuns, commitDay, commitState, resetSession, getRun, probeDatabase } from '../lib/store.js';
+import { ensureSession, loadSessionWithRuns, commitDay, commitState, resetSession, getRun, probeDatabase } from './neon-store.js';
 import { kpis } from '../lib/engine/state.js';
 import { runDay, resolveHuman, view, WEEK_PLAN, HumanDecisionPending, WeekComplete } from '../lib/engine/orchestrator.js';
 import { SCENARIO_LEADS } from '../lib/engine/scenarios.js';
@@ -36,6 +36,7 @@ async function handle(request) {
           storage: 'neon-postgres',
           platform: 'neon-functions',
           database: probe.ok ? 'ok' : 'error',
+          database_name: probe.database,
           database_role: probe.role,
         });
       } catch (e) {
