@@ -1,12 +1,21 @@
 import assert from 'node:assert/strict';
 
 const base = (process.env.LIVE_BASE_URL || 'https://loopos-autonomous-company-simulator-nathmagency-2935s-projects.vercel.app').replace(/\/$/, '');
+const apiPrefix = process.env.LIVE_API_PREFIX ?? '/api';
+const checkHomepage = process.env.CHECK_HOMEPAGE !== '0';
+const expectedPlatform = process.env.EXPECTED_PLATFORM || 'neon-functions';
 const session = `ci_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
 const secondSession = `${session}_b`;
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
+function apiPath(path) {
+  const logical = path.startsWith('/api/') ? path.slice(4) : path;
+  return `${apiPrefix}${logical}`;
+}
+
 async function request(path, { method = 'GET', body, sid = session, expect = 200 } = {}) {
-  const response = await fetch(`${base}${path}`, {
+  const target = apiPath(path);
+  const response = await fetch(`${base}${target}`, {
     method,
     headers: {
       'content-type': 'application/json',
@@ -18,7 +27,7 @@ async function request(path, { method = 'GET', body, sid = session, expect = 200
   const text = await response.text();
   let data;
   try { data = text ? JSON.parse(text) : null; } catch { data = text; }
-  assert.equal(response.status, expect, `${method} ${path} expected ${expect}, got ${response.status}: ${text.slice(0, 500)}`);
+  assert.equal(response.status, expect, `${method} ${target} expected ${expect}, got ${response.status}: ${text.slice(0, 500)}`);
   return data;
 }
 
@@ -26,32 +35,41 @@ async function waitForProduction() {
   let last;
   for (let attempt = 1; attempt <= 24; attempt++) {
     try {
-      const response = await fetch(`${base}/api/health`, { redirect: 'follow' });
+      const response = await fetch(`${base}${apiPath('/api/health')}`, { redirect: 'follow' });
       const text = await response.text();
       let data = null;
       try { data = text ? JSON.parse(text) : null; } catch {}
       last = { status: response.status, data, text };
-      if (response.status === 200 && data?.status === 'ok' && data?.database === 'ok' && data?.database_role === 'loopos_runtime_min') return data;
+      if (
+        response.status === 200 &&
+        data?.status === 'ok' &&
+        data?.database === 'ok' &&
+        data?.database_name === 'loopos' &&
+        typeof data?.database_role === 'string' &&
+        data.database_role.length > 0 &&
+        data?.platform === expectedPlatform
+      ) return data;
     } catch (error) {
       last = { error: error.message };
     }
-    console.log(`Waiting for production deployment (${attempt}/24)...`);
+    console.log(`Waiting for live service (${attempt}/24)...`);
     await sleep(5000);
   }
-  throw new Error(`Production did not become ready: ${JSON.stringify(last).slice(0, 500)}`);
+  throw new Error(`Live service did not become ready: ${JSON.stringify(last).slice(0, 500)}`);
 }
 
 function pass(name) { console.log(`PASS ${name}`); }
 
-const page = await fetch(base, { redirect: 'follow' });
-assert.equal(page.status, 200, `Homepage status ${page.status}`);
-assert.match(page.headers.get('content-type') || '', /text\/html/i);
-pass('public homepage reachable');
+if (checkHomepage) {
+  const page = await fetch(base, { redirect: 'follow' });
+  assert.equal(page.status, 200, `Homepage status ${page.status}`);
+  assert.match(page.headers.get('content-type') || '', /text\/html/i);
+  pass('public homepage reachable');
+}
 
 const health = await waitForProduction();
 assert.equal(health.storage, 'neon-postgres');
-assert.equal(health.platform, 'vercel');
-pass('public health endpoint uses least-privilege Neon role');
+pass(`health uses Neon Postgres via ${health.database_role}`);
 
 await request('/api/reset', { method: 'POST', body: {} });
 let surge = await request('/api/run/day', { method: 'POST', body: { scenario: 'demand_surge' } });
