@@ -32,7 +32,9 @@ const health = await request('/api/health');
 assert.equal(health.status, 'ok');
 assert.equal(health.storage, 'neon-postgres');
 assert.equal(health.platform, 'vercel');
-pass('public health endpoint');
+assert.equal(health.database, 'ok');
+assert.equal(health.database_role, 'loopos_runtime_min');
+pass('public health endpoint uses least-privilege Neon role');
 
 await request('/api/reset', { method: 'POST', body: {} });
 let surge = await request('/api/run/day', { method: 'POST', body: { scenario: 'demand_surge' } });
