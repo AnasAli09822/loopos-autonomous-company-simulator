@@ -1,5 +1,5 @@
-import { ensureSession, loadSessionWithRuns, commitDay, commitState, resetSession, getRun } from '../../../lib/store.js';
-import { initialState, kpis } from '../../../lib/engine/state.js';
+import { ensureSession, loadSessionWithRuns, commitDay, commitState, resetSession, getRun, probeDatabase } from '../../../lib/store.js';
+import { kpis } from '../../../lib/engine/state.js';
 import { runDay, resolveHuman, view, WEEK_PLAN, HumanDecisionPending, WeekComplete } from '../../../lib/engine/orchestrator.js';
 import { SCENARIO_LEADS } from '../../../lib/engine/scenarios.js';
 
@@ -15,7 +15,14 @@ async function segments(params){return (await params).path||[]}
 
 export async function GET(request,{params}){
   const p=await segments(params);
-  if(p.length===1&&p[0]==='health')return json({status:'ok',service:'loopos',storage:'neon-postgres',platform:'vercel'});
+  if(p.length===1&&p[0]==='health'){
+    try{
+      const probe=await probeDatabase();
+      return json({status:'ok',service:'loopos',storage:'neon-postgres',platform:'vercel',database:probe.ok?'ok':'error',database_role:probe.role});
+    }catch(e){
+      return json({status:'degraded',service:'loopos',storage:'neon-postgres',platform:'vercel',database:'error',error_code:e?.code||'DB_CONNECT_FAILED'},503);
+    }
+  }
   if(p.length===1&&p[0]==='state'){
     const sid=sessionId(request);const {state,runs}=await loadSessionWithRuns(sid);return json(view(state,runs));
   }
