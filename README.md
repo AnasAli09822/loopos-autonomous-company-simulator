@@ -2,7 +2,7 @@
 
 LoopOS is a standalone submission for **Challenge 2: The Autonomous Company Simulator**.
 
-It simulates **Northstar Cloud**, a small SaaS company operated by three accountable autonomous roles over one shared company record:
+It simulates **Northstar Cloud**, a SaaS company operated by three accountable autonomous roles over one durable shared company record:
 
 - **Sales** — converts leads into orders and escalates out-of-policy discounts.
 - **Operations** — manages backlog, throttles sales pressure, requests capacity, fulfills work, and records service-driven churn.
@@ -10,38 +10,42 @@ It simulates **Northstar Cloud**, a small SaaS company operated by three account
 
 A **Human Inbox** is a hard operating boundary: unresolved judgment calls stop the operating loop.
 
-## Architecture
+## Live demo
+
+**Production:** https://loopos-autonomous-company-simulator-nathmagency-2935s-projects.vercel.app
+
+## Production architecture
 
 ```text
-Scenario / demand inputs
-        |
-        v
-+-----------------------+
-| Shared Company Record |  Neon Postgres
-| session + version     |
-+-----------+-----------+
-            |
-     role-scoped actions
-   +--------+--------+
-   |        |        |
- Sales     Ops    Finance
-   |        |        |
-   +--------+--------+
-            |
-   Human Inbox / KPIs
-            |
-   Day snapshot + SHA-256
-            |
-       Replay verifier
+Browser / judge
+      |
+      v
+Vercel Next.js UI
+      |
+      | same-origin /api proxy (no DB secret)
+      v
+Neon Function: looposapi
+      |
+      | shared operating engine
+      | Sales -> Ops -> Finance -> Ops -> Finance -> Ops
+      v
+Neon Postgres
+company_sessions + day_runs
+      |
+      +--> Human Inbox
+      +--> KPIs / actions / events
+      +--> before-state + SHA-256 replay
 ```
+
+The runtime engine lives with the database in a Neon Function. Vercel serves the public UI and forwards `/api/*` to that function. The frontend deployment therefore has **no database credential**.
 
 The agent roles are separate modules with an explicit authority matrix. Sales cannot invoice, Ops cannot approve spend, Finance cannot close leads, and Human is the only role allowed to resolve inbox decisions.
 
 ## Shared state and concurrency
 
-The deployed build uses **Neon Postgres**. Every browser receives an isolated `session_id`. All agents inside that session operate on the same JSONB company state.
+Every browser receives an isolated `session_id`. All agents inside that session operate on the same JSONB company state in Neon Postgres.
 
-Each session has an integer `version`. A day run is calculated on an isolated copy and committed with an optimistic version check. The Postgres statement updates the company state and inserts the day record in **one atomic CTE**. If two requests race, one wins and the other returns **409 Conflict**. There is no silent double-posting of a day, order, or invoice.
+Each session has an integer `version`. A day is calculated on an isolated copy and committed with an optimistic version check. The SQL statement updates company state and inserts the day record in **one atomic CTE**. If two requests race, one wins and the other returns **409 Conflict**.
 
 Database constraints reinforce the model:
 
@@ -54,8 +58,6 @@ Database constraints reinforce the model:
 
 ## Run the week
 
-Default operating plan:
-
 | Day | Scenario |
 |---|---|
 | 1 | Normal demand |
@@ -64,46 +66,45 @@ Default operating plan:
 | 4 | Quiet continuation after approval |
 | 5 | Sales runaway / failure test |
 
-`Run the week` stops automatically when a human decision is open. It resumes from the same shared record after resolution.
+`Run the week` stops automatically when a human decision is open. It resumes from the same shared records after resolution.
 
 ## Demonstrated behaviors
 
-### Self-correction
-Demand Surge closes four deals, pushes backlog above base capacity, and causes Ops to throttle Sales and request flex capacity. Finance independently checks the cash reserve and approves `$800`. Ops then activates `+2` capacity, fulfills the backlog, and removes the throttle.
+### Autonomous self-correction
+Demand Surge closes four deals, pushes backlog above base capacity, and causes Ops to throttle Sales and request flex capacity. Finance independently checks the cash reserve and approves `$800`. Ops activates `+2` capacity, clears the backlog, and removes the throttle.
 
 Expected result:
 
 - Revenue `+$11,536`
 - Cost `+$800`
-- Backlog `4 → 0`
+- Backlog `4 -> 0`
 - Flex `+2`
 - Human intervention: **none**
 
 ### Human boundary
-Nova Enterprise requests a 25% discount on a `$12,000` deal. Sales cannot approve it. The lead moves to `pending_human`, the Human Inbox opens, and another day cannot run until the decision is resolved.
+Nova Enterprise requests a 25% discount on a `$12,000` deal. Sales cannot approve it. The lead becomes `pending_human`, the Human Inbox opens, and another day cannot run until the decision is resolved.
 
-On approval, the **same lead** returns to the loop and closes at `$9,000`.
+On approval, the **same lead** returns to the operating loop and closes at `$9,000`.
 
 ### Failure test
-In `sales_runaway`, Sales closes seven deals rapidly. Other roles respond through shared state:
+In `sales_runaway`, Sales closes seven deals rapidly. Other roles react through shared state:
 
 - Ops detects backlog `7`
 - Ops requests `4` flex units
 - Finance approves bounded spend
-- Finance detects a commercial control breach
-- Finance suspends Sales
+- Finance detects a commercial control breach and suspends Sales
 - Finance opens Human Inbox review
 - Ops fulfills six orders
-- Backlog falls `7 → 1`
-- Actual customer churn moves `0 → 1`
+- Backlog falls `7 -> 1`
+- Actual customer churn moves `0 -> 1`
 
-The company contains most of the operational damage but does not pretend the failure was consequence-free.
+The company contains most operational damage but does not pretend the failure was consequence-free.
 
 ## Replay
 
 Before each day, LoopOS stores the canonical pre-day state. Replay re-runs the same scenario with the same run id against that snapshot, recomputes SHA-256, and compares it with the original `after_hash`.
 
-Replay does **not** mutate live company state.
+Replay is execution, not event playback, and it does **not** mutate live company state.
 
 ## Verification
 
@@ -114,36 +115,33 @@ node scripts/evaluate.mjs
 npm run build
 ```
 
-Current local verification:
+Current engine verification:
 
 - **30 / 30 automated tests**
 - **16 / 16 challenge evaluation checks**
 
-The infrastructure was also manually verified against Neon for:
+The deployed Neon Function also passed a full independent external acceptance run covering:
 
-- optimistic version conflict rejection
-- atomic state + day-run commit
-- unique day enforcement
-- schema constraints and indexes
-- least-privilege runtime role
+- database health
+- Demand Surge self-correction
+- deterministic replay
+- Human Inbox blocking + approval + resume
+- Sales Runaway containment and actual churn
+- run-the-week pause/resume through Day 5
+- session isolation
+
+The acceptance run ends with **`LIVE ACCEPTANCE PASSED`**.
 
 ## Deployment
 
-Production architecture:
-
-- **Vercel** — Next.js UI and API route handler
+- **Vercel** — public Next.js interface + same-origin API proxy
+- **Neon Function (`looposapi`)** — operating API and engine runtime
 - **Neon Postgres** — durable shared state and replay records
 
-Required environment variable:
-
-```bash
-DATABASE_URL=postgresql://...
-```
-
-The final runtime role is `loopos_runtime_min`, which has only the table privileges required by LoopOS. A new Vercel Production deployment was created with this role on 2026-09-17. Vercel deployment-read APIs are still blocked by a team-scope OAuth mismatch, so build readiness and anonymous browser access must be re-verified after re-authenticating the Vercel connector to `nathmagency-2935s-projects`.
+The Vercel deployment does not need `DATABASE_URL`. Neon injects its branch database connection only inside the database-side function runtime.
 
 ## Scope
 
-LoopOS is deliberately a deterministic operating simulator, not a claim that a real company should run without humans. Deterministic agents make authority boundaries, failure recovery, audit evidence, and replay testable. Real payment rails, CRM integrations, legal approvals, live model calls, and real customer data are intentionally out of scope.
+LoopOS is deliberately a deterministic operating simulator, not a claim that a real company should run without humans. Deterministic agents make authority boundaries, failure recovery, audit evidence, and replay objectively testable. Real payment rails, CRM integrations, legal approvals, live probabilistic model calls, and real customer data are intentionally out of scope.
 
-See `docs/` for the architecture, scoring map, failure test, AI usage disclosure, thesis, and 90-second walkthrough script.
+See `docs/` for the architecture snapshot, scoring map, failure test, AI usage disclosure, two-year thesis, deployment evidence, and 90-second walkthrough script.
