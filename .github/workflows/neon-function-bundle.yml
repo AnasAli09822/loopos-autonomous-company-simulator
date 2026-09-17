@@ -1,0 +1,39 @@
+name: Bundle Neon Function
+
+on:
+  push:
+    branches: ["fix/neon-function-backend"]
+    paths:
+      - "functions/**"
+      - "lib/**"
+      - "package.json"
+      - ".github/workflows/neon-function-bundle.yml"
+  workflow_dispatch:
+
+jobs:
+  bundle:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install --no-audit --no-fund
+      - run: npm install --no-save esbuild@0.25.10
+      - name: Bundle function
+        run: |
+          mkdir -p dist
+          npx esbuild functions/loopos-backend.mjs \
+            --bundle \
+            --platform=node \
+            --target=node24 \
+            --format=esm \
+            --banner:js="import{createRequire as ___cr}from'module';import{fileURLToPath as ___f}from'url';import{dirname as ___d}from'path';const require=___cr(import.meta.url);const __filename=___f(import.meta.url);const __dirname=___d(__filename);" \
+            --outfile=dist/index.mjs
+          (cd dist && zip -j function.zip index.mjs)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: loopos-neon-function
+          path: dist/function.zip
+          if-no-files-found: error
+          retention-days: 7
