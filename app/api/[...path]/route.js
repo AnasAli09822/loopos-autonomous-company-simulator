@@ -31,7 +31,10 @@ export async function GET(request,{params}){
 
 export async function POST(request,{params}){
   const p=await segments(params),sid=sessionId(request);const body=await request.json().catch(()=>({}));
-  if(p.length===1&&p[0]==='reset'){const {state}=await resetSession(sid);return json(view(state,[]));}
+  if(p.length===1&&p[0]==='reset'){
+    try{const {state}=await resetSession(sid);return json(view(state,[]));}
+    catch(e){console.error('resetSession failed',{code:e?.code||null,name:e?.name||null});return json({detail:'Reset failed',error_code:e?.code||'RESET_FAILED'},500);}
+  }
   if(p.join('/')==='run/day'){
     const scenario=String(body.scenario||'normal');if(!(scenario in SCENARIO_LEADS))return fail('Unknown scenario',400);
     const {state,version}=await ensureSession(sid);
