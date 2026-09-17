@@ -1,0 +1,25 @@
+name: Neon Function Acceptance
+
+on:
+  push:
+    branches: ["fix/neon-function-backend"]
+    paths:
+      - "scripts/live-verify.mjs"
+      - ".github/workflows/neon-function-acceptance.yml"
+  workflow_dispatch:
+
+jobs:
+  acceptance:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Verify live Neon backend
+        env:
+          LIVE_BASE_URL: https://br-lucky-haze-b5pb8wxa-looposapi.compute.c-7.us-east-2.aws.neon.tech
+          LIVE_API_PREFIX: ""
+          CHECK_HOMEPAGE: "0"
+          EXPECTED_PLATFORM: neon-functions
+        run: node scripts/live-verify.mjs
